@@ -13,11 +13,17 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from .resources import payload_directory
-from .root_agent import RootAgentServer, generate_secret, write_secret
+from .root_agent import (
+    RootAgentConnection,
+    RootAgentServer,
+    generate_secret,
+    write_secret,
+)
 from .sdb import CaptureResult, SdbClient, SdbError, find_sdb, route_callback_host
 
 
@@ -82,7 +88,9 @@ def _runtime(client: SdbClient) -> str:
     ):
         active = _capture(client, "readlink -f /usr/share/dotnet.tizen/netcoreapp")
         match = re.fullmatch(
-            r"(\d+)\.(\d+)\.(\d+)", PurePosixPath(active).name
+            r"/usr/share/dotnet/shared/Microsoft\.NETCore\.App/"
+            r"(\d+)\.(\d+)\.(\d+)",
+            active,
         )
         if match is None:
             raise ArchiveRootError(f"unexpected active .NET runtime path: {active}")
@@ -284,6 +292,7 @@ async def probe(
     command_timeout: float = 45.0,
     commands: tuple[str, ...] = (),
     payloads: Path | None = None,
+    session_handler: Callable[[RootAgentConnection], Awaitable[int]] | None = None,
 ) -> dict[str, object]:
     ipaddress.IPv4Address(tv_host)
     callback = callback_host or route_callback_host(tv_host)
@@ -333,6 +342,7 @@ async def probe(
                     callback_host=callback,
                     bind_host=bind,
                     timeout=accept_timeout + 20,
+                    persistent=session_handler is not None,
                 )
             )
             try:
@@ -383,15 +393,27 @@ async def probe(
                                 "stderr": result.stderr,
                             }
                         )
+                if session_handler is not None:
+                    evidence["session_exit"] = await session_handler(connection)
             finally:
                 await connection.shutdown()
             if launch_task is not None:
-                launch_result = await asyncio.wait_for(launch_task, timeout=15)
-                if "[exit:0]" not in launch_result.output:
-                    raise ArchiveRootError(
-                        "launcher exited unsuccessfully: "
-                        + launch_result.output.strip()
-                    )
+                try:
+                    launch_result = await asyncio.wait_for(launch_task, timeout=15)
+                except TimeoutError:
+                    if session_handler is None:
+                        raise
+                    # Long sessions may outlive the SDB launch transport. The
+                    # authenticated agent has shut down; require the independent
+                    # cleanup and system-file checks below before returning.
+                    evidence["launcher_exit_observed"] = False
+                else:
+                    evidence["launcher_exit_observed"] = True
+                    if "[exit:0]" not in launch_result.output:
+                        raise ArchiveRootError(
+                            "launcher exited unsuccessfully: "
+                            + launch_result.output.strip()
+                        )
             return evidence
     finally:
         await server.close()
@@ -402,6 +424,13 @@ async def probe(
                 pass
         cleaned = False
         if staging_started:
+            if session_handler is not None:
+                # SDB may expire while a long authenticated root session runs.
+                # Reconnect before the SDK-side cleanup and final hash check.
+                try:
+                    await asyncio.to_thread(client.connect)
+                except SdbError:
+                    pass
             try:
                 cleaned = await asyncio.to_thread(_cleanup, client, package)
             except (ArchiveRootError, SdbError):
