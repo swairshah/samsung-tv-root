@@ -64,7 +64,9 @@ def test_archive_shell_shuts_down_and_cleans_up_on_exit_or_failure(
     monkeypatch.setattr(
         archive_root,
         "_check_target",
-        lambda client: archive_root.TargetAssessment("capabilities", "hashes", "6.0"),
+        lambda client, runtime=None: archive_root.TargetAssessment(
+            "capabilities", "hashes", "6.0", "detected"
+        ),
     )
     monkeypatch.setattr(archive_root, "_prepare_artifacts", lambda *args: None)
     monkeypatch.setattr(archive_root, "_stage", lambda *args: None)

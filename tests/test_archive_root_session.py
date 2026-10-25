@@ -77,7 +77,8 @@ def test_launcher_timeout_never_bypasses_cleanup_or_original_file_checks(
         archive_root,
         "_check_target",
         lambda *a: SimpleNamespace(
-            runtime="6.0", capabilities="capabilities", original_hashes="original"
+            runtime="6.0", runtime_source="detected",
+            capabilities="capabilities", original_hashes="original"
         ),
     )
     monkeypatch.setattr(archive_root, "_prepare_artifacts", lambda *a: None)

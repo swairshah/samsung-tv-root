@@ -88,7 +88,9 @@ def _runtime(client: SdbClient) -> str:
     ):
         active = _capture(client, "readlink -f /usr/share/dotnet.tizen/netcoreapp")
         match = re.fullmatch(
-            r"(\d+)\.(\d+)\.(\d+)", PurePosixPath(active).name
+            r"/usr/share/dotnet/shared/Microsoft\.NETCore\.App/"
+            r"(\d+)\.(\d+)\.(\d+)",
+            active,
         )
         if match is None:
             raise ArchiveRootError(f"unexpected active .NET runtime path: {active}")
